@@ -23,12 +23,22 @@ int main() {
         exit();
     }
 
+    // چاپ داده‌های نوشته شده و خوانده شده
+    printf(1, "Written data: %s\n", data);
+    printf(1, "Read data: %s\n", buffer);
+
+    // مقایسه داده‌ها
+    if (strcmp(data, buffer) != 0) {
+        printf(1, "Data mismatch: Written data and read data are not the same.\n");
+        exit();
+    }
+
     // آزادسازی منبع
     if (releaseresource(0) != 0) {
         printf(1, "Release failed\n");
         exit();
     }
 
-    printf(1, "Success!\n");
+    printf(1, "Success! Data written and read are identical.\n");
     exit();
 }

@@ -782,7 +782,13 @@ int requestresource(int Resource_ID) {
             return -1; 
         }
     } else {
-       
+        if (resources[resource_id].startaddr == 0) {
+            resources[resource_id].startaddr = kalloc();
+            if (!resources[resource_id].startaddr) {
+                release(&ptable.lock);
+                return -1; // تخصیص حافظه شکست خورد
+            }
+        }
         resources[resource_id].acquired = myproc()->pid;
         add_edge(resource_id + MAXTHREAD, myproc()->pid);
 
@@ -797,6 +803,7 @@ int requestresource(int Resource_ID) {
         return 0; 
     }
 }
+
 
 int releaseresource(int Resource_ID) {
     int resource_id = Resource_ID;
@@ -813,6 +820,11 @@ int releaseresource(int Resource_ID) {
 
     resources[resource_id].acquired = 0;
     remove_edge(resource_id + MAXTHREAD, myproc()->pid);
+
+    if (resources[resource_id].startaddr != 0) {
+        kfree((char *)resources[resource_id].startaddr);
+        resources[resource_id].startaddr = 0;
+    }
 
     release(&ptable.lock);
     return 0;
