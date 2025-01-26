@@ -6,6 +6,11 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+// Resource resources[NRESOURCE];
+// struct resource *resources;
+void *resource_page;          
+struct resource *resources;   
+void *other_data;             
 
 struct {
   struct spinlock lock;
@@ -27,7 +32,61 @@ struct {
 
 
 
-      //Graph creation and functions
+int dfs(int v) {
+    if (Graph.recStack[v]) return 1;
+    if (Graph.visited[v]) return 0;
+
+    Graph.visited[v] = 1;
+    Graph.recStack[v] = 1;
+
+    Node* temp = Graph.adjList[v];
+    while (temp != 0) {
+        if (dfs(temp->vertex)) return 1;
+        temp = temp->next;
+    }
+
+    Graph.recStack[v] = 0;
+    return 0;
+}
+
+int detect_deadlock(void) {
+    for (int i = 0; i < MAXTHREAD + NRESOURCE; i++) {
+        Graph.visited[i] = 0;
+        Graph.recStack[i] = 0;
+    }
+
+    for (int i = 0; i < MAXTHREAD + NRESOURCE; i++) {
+        if (!Graph.visited[i] && dfs(i)) return 1;
+    }
+
+    return 0;
+}
+
+void remove_edge(int src, int dest) {
+    Node* temp = Graph.adjList[src];
+    Node* prev = 0;
+
+    while (temp != 0 && temp->vertex != dest) {
+        prev = temp;
+        temp = temp->next;
+    }
+    if (temp == 0) return;
+
+    if (prev) {
+        prev->next = temp->next;
+    } else {
+        Graph.adjList[src] = temp->next;
+    }
+
+    kfree((char*)temp);
+}
+
+void add_edge(int src, int dest) {
+    Node* newNode = (Node*)kalloc();
+    newNode->vertex = dest;
+    newNode->next = Graph.adjList[src];
+    Graph.adjList[src] = newNode;
+}
 
 
 
@@ -172,10 +231,22 @@ userinit(void)
   // because the assignment might not be atomic.
 //################ADD Your Implementation Here######################
 
+resource_page = kalloc();
+    if (!resource_page) {
+        panic("Failed to allocate resource page");
+    }
+   
+    resources = (struct resource *)resource_page;         // up
+    other_data = (void *)((char *)resource_page + 2048);  // down
 
+    for (int i = 0; i < NRESOURCE; i++) {
+        resources[i].resourceid = i;
+        safestrcpy(resources[i].name, "RSC", sizeof(resources[i].name));
+        resources[i].acquired = 0;
+        resources[i].startaddr = 0;
+    }
 
-      //Resource page handling and creation
-
+    cprintf("Resource memory initialized successfully.\n");
 
 
 //##################################################################
@@ -691,31 +762,117 @@ procdump(void)
   }
 }
 
-int requestresource(int Resource_ID)
-{
-//################ADD Your Implementation Here######################
+int requestresource(int Resource_ID) {
+    int resource_id = Resource_ID;
+    if (resource_id < 0 || resource_id >= NRESOURCE) {
+        return -1;
+    }
 
-//##################################################################
-return -1;
+    acquire(&ptable.lock);
+
+    if (resources[resource_id].acquired) {
+        add_edge(myproc()->pid, resource_id + MAXTHREAD);
+        
+        if (detect_deadlock()) {
+            remove_edge(myproc()->pid, resource_id + MAXTHREAD);
+            release(&ptable.lock);
+            return -2;
+        } else {
+            release(&ptable.lock);
+            return -1; 
+        }
+    } else {
+       
+        resources[resource_id].acquired = myproc()->pid;
+        add_edge(resource_id + MAXTHREAD, myproc()->pid);
+
+        if (detect_deadlock()) {
+            resources[resource_id].acquired = 0;
+            remove_edge(resource_id + MAXTHREAD, myproc()->pid);
+            release(&ptable.lock);
+            return -2; 
+        }
+
+        release(&ptable.lock);
+        return 0; 
+    }
 }
-int releaseresource(int Resource_ID)
-{
-  //################ADD Your Implementation Here######################
 
-//##################################################################
-  return -1;
+int releaseresource(int Resource_ID) {
+    int resource_id = Resource_ID;
+    if (resource_id < 0 || resource_id >= NRESOURCE) {
+        return -1;
+    }
+
+    acquire(&ptable.lock);
+
+    if (resources[resource_id].acquired != myproc()->pid) {
+        release(&ptable.lock);
+        return -1; 
+    }
+
+    resources[resource_id].acquired = 0;
+    remove_edge(resource_id + MAXTHREAD, myproc()->pid);
+
+    release(&ptable.lock);
+    return 0;
 }
-int writeresource(int Resource_ID,void* buffer,int offset, int size)
-{
-//################ADD Your Implementation Here######################
-
 //##################################################################
-  return -1;
+int writeresource(int Resource_ID, void *buffer, int offset, int size) {
+    if (Resource_ID < 0 || Resource_ID >= NRESOURCE) {
+        return -1;
+    }
+
+    acquire(&ptable.lock); 
+
+    struct resource *res = &resources[Resource_ID];
+    struct proc *p = myproc();
+
+    if (res->acquired != p->pid || res->startaddr == 0) {
+        release(&ptable.lock);
+        return -1;
+    }
+
+    if (offset < 0 || size < 0 || offset + size > 2048) {
+        release(&ptable.lock);
+        return -1;
+    }
+
+    char *dst = (char *)res->startaddr + offset;
+    char *src = (char *)buffer;
+    for (int i = 0; i < size; i++) {
+        dst[i] = src[i];
+    }
+
+    release(&ptable.lock);
+    return 0;
 }
-int readresource(int Resource_ID,int offset, int size,void* buffer)
-{
-//################ADD Your Implementation Here######################
+int readresource(int Resource_ID, int offset, int size, void *buffer) {
+    if (Resource_ID < 0 || Resource_ID >= NRESOURCE) {
+        return -1;
+    }
 
-//##################################################################
-  return -1;
+    acquire(&ptable.lock); 
+
+    struct resource *res = &resources[Resource_ID];
+    struct proc *p = myproc();
+
+    if (res->acquired != p->pid || res->startaddr == 0) {
+        release(&ptable.lock);
+        return -1;
+    }
+
+    if (offset < 0 || size < 0 || offset + size > 2048) {
+        release(&ptable.lock);
+        return -1;
+    }
+
+    char *src = (char *)res->startaddr + offset;
+    char *dst = (char *)buffer;
+    for (int i = 0; i < size; i++) {
+        dst[i] = src[i];
+    }
+
+    release(&ptable.lock);
+    return 0;
 }
